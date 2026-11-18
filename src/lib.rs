@@ -1,6 +1,9 @@
 #[cfg(feature = "messagebox")]
 pub mod messagebox;
 
+#[cfg(feature = "lock-aspect-ratio")]
+pub mod aspect_ratio;
+
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::HWND;
 
