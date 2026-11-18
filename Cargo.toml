@@ -1,0 +1,14 @@
+[package]
+name = "winwin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bon = { version = "3.10.3", optional = true }
+pastey = { version = "0.2.3", optional = true }
+raw-window-handle = "0.6.2"
+windows = { version = "0.62.2", features = ["Win32_Foundation"] }
+
+[features]
+messagebox = ["dep:pastey", "dep:bon", "windows/Win32_UI_WindowsAndMessaging"]
+lock-aspect-ratio = ["windows/Win32_UI_Shell"]
