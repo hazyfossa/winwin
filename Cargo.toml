@@ -7,8 +7,10 @@ edition = "2024"
 bon = { version = "3.10.3", optional = true }
 pastey = { version = "0.2.3", optional = true }
 raw-window-handle = "0.6.2"
+serde = { version = "1.0.229", optional = true, features = ["derive"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation"] }
 
 [features]
 messagebox = ["dep:pastey", "dep:bon", "windows/Win32_UI_WindowsAndMessaging"]
 lock-aspect-ratio = ["windows/Win32_UI_Shell"]
+serde = ["dep:serde"]

@@ -1,14 +1,19 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#[cfg(feature = "messagebox")]
+pub mod messagebox;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use windows::Win32::Foundation::HWND;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+#[cfg(not(target_os = "windows"))]
+compile_error!("WinWin is only supported on windows");
+
+fn hwnd(window: impl HasWindowHandle) -> HWND {
+    match window
+        .window_handle()
+        .expect("Failed to get window handle")
+        .as_raw()
+    {
+        RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as _),
+        _ => unreachable!(), // guarded by compilation check above
     }
 }
