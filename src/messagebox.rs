@@ -16,15 +16,13 @@ use windows::{
             MESSAGEBOX_STYLE, MessageBoxW,
         },
     },
-    core::{HSTRING, PCWSTR, Result},
+    core::Result,
 };
 
 #[cfg(feature = "serde")]
 use serde::Deserialize;
 
-fn pass_text(text: &str) -> PCWSTR {
-    PCWSTR::from_raw(HSTRING::from(text).as_ptr())
-}
+use crate::pass_text;
 
 struct Flags(MESSAGEBOX_STYLE);
 

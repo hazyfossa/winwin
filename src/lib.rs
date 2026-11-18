@@ -1,11 +1,15 @@
+#[cfg(feature = "lock-aspect-ratio")]
+pub mod aspect_ratio;
+#[cfg(feature = "blob")]
+pub mod blob;
 #[cfg(feature = "messagebox")]
 pub mod messagebox;
 
-#[cfg(feature = "lock-aspect-ratio")]
-pub mod aspect_ratio;
-
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::HWND;
+use windows::{
+    Win32::Foundation::HWND,
+    core::{HSTRING, PCWSTR},
+};
 
 #[cfg(not(target_os = "windows"))]
 compile_error!("WinWin is only supported on windows");
@@ -19,4 +23,8 @@ fn hwnd(window: impl HasWindowHandle) -> HWND {
         RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as _),
         _ => unreachable!(), // guarded by compilation check above
     }
+}
+
+fn pass_text(text: &str) -> PCWSTR {
+    PCWSTR::from_raw(HSTRING::from(text).as_ptr())
 }
