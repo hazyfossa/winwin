@@ -28,3 +28,58 @@ fn hwnd(window: impl HasWindowHandle) -> HWND {
 fn pass_text(text: &str) -> PCWSTR {
     PCWSTR::from_raw(HSTRING::from(text).as_ptr())
 }
+
+#[cfg(feature = "tracing-layer")]
+pub mod tracing_layer {
+    use std::io;
+
+    use tracing_core::Metadata;
+    use tracing_subscriber::{
+        fmt::MakeWriter,
+        layer::{Context, Filter},
+    };
+    use windows::Win32::System::Diagnostics::Debug::{IsDebuggerPresent, OutputDebugStringW};
+
+    use crate::pass_text;
+
+    /// Should be used both
+    /// - as a writer - to forward logs as windows debugging events
+    /// - as a filter - to disable the tracing stack when no debugger is attached
+    pub struct WinDebug;
+
+    impl io::Write for WinDebug {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let text = str::from_utf8(buf).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "DebugOutputWriter only supports utf-8 data",
+                )
+            })?;
+
+            let arg = pass_text(text);
+
+            unsafe { OutputDebugStringW(arg) };
+
+            Ok(buf.len())
+        }
+
+        // TODO: does it make sense to keep an internal buffer?
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for WinDebug {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            Self
+        }
+    }
+
+    impl<S> Filter<S> for WinDebug {
+        fn enabled(&self, _: &Metadata, _: &Context<'_, S>) -> bool {
+            unsafe { IsDebuggerPresent() }.as_bool()
+        }
+    }
+}
