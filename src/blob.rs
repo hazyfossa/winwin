@@ -8,20 +8,26 @@ use windows::{
 
 use crate::pass_text;
 
-pub enum ResourceId<'a> {
-    Text(&'a str),
-    Int(u16),
-}
-
 pub const fn int_resource(id: u16) -> PCWSTR {
     PCWSTR::from_raw(id as usize as *const u16)
 }
 
-impl<'a> ResourceId<'a> {
-    fn into_lpname(self) -> PCWSTR {
-        match self {
-            Self::Int(x) => int_resource(x),
-            Self::Text(x) => pass_text(x),
+struct ResourceId {
+    lpname: PCWSTR,
+}
+
+impl<'a> Into<ResourceId> for &'a str {
+    fn into(self) -> ResourceId {
+        ResourceId {
+            lpname: pass_text(self),
+        }
+    }
+}
+
+impl Into<ResourceId> for u16 {
+    fn into(self) -> ResourceId {
+        ResourceId {
+            lpname: int_resource(self),
         }
     }
 }
@@ -29,9 +35,10 @@ impl<'a> ResourceId<'a> {
 // ref: https://learn.microsoft.com/en-us/windows/win32/menurc/resource-types
 const RT_RCDATA: PCWSTR = int_resource(10);
 
-pub fn load_resouse_blob(id: ResourceId) -> Result<&'static [u8]> {
-    let lpname = id.into_lpname();
-    let hres = unsafe { FindResourceW(None, lpname, RT_RCDATA) };
+#[allow(private_bounds)]
+pub fn load_resouse_blob(id: impl Into<ResourceId>) -> Result<&'static [u8]> {
+    let resource_id = id.into();
+    let hres = unsafe { FindResourceW(None, resource_id.lpname, RT_RCDATA) };
 
     if hres.is_invalid() {
         return Err(Error::from_thread());
