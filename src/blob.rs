@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use windows::{
     Win32::{
         Foundation::{E_POINTER, HMODULE},
@@ -48,13 +50,23 @@ impl ResourceKind {
     }
 }
 
-pub struct Exe {
+pub struct Exe<'a> {
     module: Option<HMODULE>,
+    _p: PhantomData<&'a ()>,
 }
 
-impl Exe {
+impl Exe<'static> {
     pub fn current() -> Self {
-        Self { module: None }
+        Self::new(None)
+    }
+}
+
+impl<'a> Exe<'a> {
+    fn new(module: Option<HMODULE>) -> Self {
+        Self {
+            module,
+            _p: PhantomData,
+        }
     }
 
     pub fn open(path: &str) -> Result<Self> {
@@ -65,9 +77,8 @@ impl Exe {
                 LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE,
             )?
         };
-        Ok(Self {
-            module: Some(module),
-        })
+
+        Ok(Self::new(Some(module)))
     }
 
     #[allow(private_bounds)]
@@ -75,7 +86,7 @@ impl Exe {
         &self,
         kind: ResourceKind,
         id: impl Into<ResourceId>,
-    ) -> Result<Option<&[u8]>> {
+    ) -> Result<Option<&'a [u8]>> {
         let lpname = id.into().lpname;
         let lptype = int_resource(kind.into_id());
         let hres = unsafe { FindResourceW(self.module, lpname, lptype) };
@@ -102,7 +113,7 @@ impl Exe {
     }
 }
 
-impl Drop for Exe {
+impl<'a> Drop for Exe<'a> {
     fn drop(&mut self) {
         if let Some(mut remote) = self.module {
             unsafe { remote.free() };
