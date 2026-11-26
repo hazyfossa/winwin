@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use windows::{
     Win32::{
-        Foundation::{E_POINTER, HMODULE},
+        Foundation::{E_POINTER, HMODULE, HRSRC},
         System::LibraryLoader::{
             FindResourceW, LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE,
             LoadLibraryExW, LoadResource, LockResource, SizeofResource,
@@ -50,25 +50,11 @@ impl ResourceKind {
     }
 }
 
-pub struct Exe<'a> {
-    module: Option<HMODULE>,
-    _p: PhantomData<&'a ()>,
+pub struct RemoteExe {
+    module: HMODULE,
 }
 
-impl Exe<'static> {
-    pub fn current() -> Self {
-        Self::new(None)
-    }
-}
-
-impl<'a> Exe<'a> {
-    fn new(module: Option<HMODULE>) -> Self {
-        Self {
-            module,
-            _p: PhantomData,
-        }
-    }
-
+impl RemoteExe {
     pub fn open(path: &str) -> Result<Self> {
         let module = unsafe {
             LoadLibraryExW(
@@ -78,45 +64,95 @@ impl<'a> Exe<'a> {
             )?
         };
 
-        Ok(Self::new(Some(module)))
+        Ok(Self { module })
+    }
+
+    pub fn resources(&self) -> Resources<'_> {
+        // Safety: `self` owns the module for it's lifetime
+        unsafe { Resources::bind_lifetime(Some(self.module)) }
+    }
+}
+
+impl Drop for RemoteExe {
+    fn drop(&mut self) {
+        unsafe { self.module.free() };
+    }
+}
+
+pub struct CurrentExe(());
+
+impl CurrentExe {
+    pub fn open() -> Self {
+        Self(())
+    }
+
+    pub fn resources(&self) -> Resources<'static> {
+        // Safety: windows won't clean up resources while
+        // the current app is alive
+        unsafe { Resources::bind_lifetime(None) }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Resources<'a> {
+    module_ref: Option<HMODULE>,
+    _p: PhantomData<&'a ()>,
+}
+
+impl<'a> Resources<'a> {
+    // Safety: this is equivalent to an unsafe (raw pointer -> reference) cast
+    // caller needs to ensure `module` is alive for `'a`
+    unsafe fn bind_lifetime(module: Option<HMODULE>) -> Self {
+        Self {
+            module_ref: module,
+            _p: PhantomData,
+        }
     }
 
     #[allow(private_bounds)]
-    pub fn open_resource(
-        &self,
-        kind: ResourceKind,
-        id: impl Into<ResourceId>,
-    ) -> Result<Option<&'a [u8]>> {
+    pub fn open(&self, kind: ResourceKind, id: impl Into<ResourceId>) -> Option<Resource<'a>> {
         let lpname = id.into().lpname;
         let lptype = int_resource(kind.into_id());
-        let hres = unsafe { FindResourceW(self.module, lpname, lptype) };
+        let hres = unsafe { FindResourceW(self.module_ref, lpname, lptype) };
 
         if hres.is_invalid() {
-            return Ok(None);
+            return None;
         }
 
-        let len = unsafe { SizeofResource(self.module, hres) } as usize;
-        let hmem = unsafe { LoadResource(self.module, hres)? };
-        let ptr = unsafe { LockResource(hmem) };
+        Some(Resource {
+            parent: *self,
+            hres,
+        })
+    }
+}
+
+pub struct Resource<'a> {
+    parent: Resources<'a>,
+    hres: HRSRC,
+}
+
+impl<'a> Resource<'a> {
+    pub fn len(&self) -> usize {
+        let hmodule = self.parent.module_ref;
+        unsafe { SizeofResource(hmodule, self.hres) as usize }
+    }
+
+    pub fn load_bytes(&self) -> Result<&'a [u8]> {
+        let hmodule = self.parent.module_ref;
+        let hmem = unsafe { LoadResource(hmodule, self.hres)? };
+        let ptr = unsafe { LockResource(hmem) }; // TODO: unlock guard
 
         if ptr.is_null() {
             return Err(Error::from_hresult(E_POINTER));
         }
 
+        let len = self.len();
         if len == 0 {
-            return Ok(Some(&[]));
+            return Ok(&[]);
         }
 
         let bytes = unsafe { std::slice::from_raw_parts(ptr.cast(), len) };
 
-        Ok(Some(bytes))
-    }
-}
-
-impl<'a> Drop for Exe<'a> {
-    fn drop(&mut self) {
-        if let Some(mut remote) = self.module {
-            unsafe { remote.free() };
-        }
+        Ok(bytes)
     }
 }
