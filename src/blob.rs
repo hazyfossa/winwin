@@ -1,9 +1,12 @@
 use windows::{
     Win32::{
-        Foundation::E_POINTER,
-        System::LibraryLoader::{FindResourceW, LoadResource, LockResource, SizeofResource},
+        Foundation::{E_POINTER, HMODULE},
+        System::LibraryLoader::{
+            FindResourceW, LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE,
+            LoadLibraryExW, LoadResource, LockResource, SizeofResource,
+        },
     },
-    core::{Error, PCWSTR, Result},
+    core::{Error, Free, PCWSTR, Result},
 };
 
 use crate::pass_text;
@@ -32,36 +35,77 @@ impl Into<ResourceId> for u16 {
     }
 }
 
-// ref: https://learn.microsoft.com/en-us/windows/win32/menurc/resource-types
-const RT_RCDATA: PCWSTR = int_resource(10);
+pub enum ResourceKind {
+    Data,
+}
 
-#[allow(private_bounds)]
-pub fn load_resouse_blob(id: impl Into<ResourceId>) -> Result<&'static [u8]> {
-    let resource_id = id.into();
-    let hres = unsafe { FindResourceW(None, resource_id.lpname, RT_RCDATA) };
+impl ResourceKind {
+    // ref: https://learn.microsoft.com/en-us/windows/win32/menurc/resource-types
+    fn into_id(self) -> u16 {
+        match self {
+            Self::Data => 10,
+        }
+    }
+}
 
-    if hres.is_invalid() {
-        return Err(Error::from_thread());
+pub struct Exe {
+    module: Option<HMODULE>,
+}
+
+impl Exe {
+    pub fn current() -> Self {
+        Self { module: None }
     }
 
-    let len = unsafe { SizeofResource(None, hres) } as usize;
-    let hmem = unsafe { LoadResource(None, hres)? };
-
-    let ptr = unsafe { LockResource(hmem) };
-
-    if ptr.is_null() {
-        return Err(Error::from_hresult(E_POINTER));
+    pub fn open(path: &str) -> Result<Self> {
+        let module = unsafe {
+            LoadLibraryExW(
+                pass_text(path),
+                None,
+                LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE,
+            )?
+        };
+        Ok(Self {
+            module: Some(module),
+        })
     }
 
-    if len == 0 {
-        return Ok(&[]);
-    }
+    #[allow(private_bounds)]
+    pub fn open_resource(
+        &self,
+        kind: ResourceKind,
+        id: impl Into<ResourceId>,
+    ) -> Result<Option<&[u8]>> {
+        let lpname = id.into().lpname;
+        let lptype = int_resource(kind.into_id());
+        let hres = unsafe { FindResourceW(self.module, lpname, lptype) };
 
-    // SAFETY: `data` is non-null, `u8`-aligned, and points to `len`
-    // initialized, immutable bytes in the mapped image.
-    //
-    // We always load from the current module, so the 'static lifetime is appropriate:
-    // windows will not clean up current resources while the program is running
-    let bytes = unsafe { std::slice::from_raw_parts(ptr.cast(), len) };
-    Ok(bytes)
+        if hres.is_invalid() {
+            return Ok(None);
+        }
+
+        let len = unsafe { SizeofResource(self.module, hres) } as usize;
+        let hmem = unsafe { LoadResource(self.module, hres)? };
+        let ptr = unsafe { LockResource(hmem) };
+
+        if ptr.is_null() {
+            return Err(Error::from_hresult(E_POINTER));
+        }
+
+        if len == 0 {
+            return Ok(Some(&[]));
+        }
+
+        let bytes = unsafe { std::slice::from_raw_parts(ptr.cast(), len) };
+
+        Ok(Some(bytes))
+    }
+}
+
+impl Drop for Exe {
+    fn drop(&mut self) {
+        if let Some(mut remote) = self.module {
+            unsafe { remote.free() };
+        }
+    }
 }
