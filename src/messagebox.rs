@@ -168,8 +168,8 @@ pub struct Message<'a> {
     #[cfg_attr(feature = "serde", serde(skip))]
     hwnd: Option<HWND>,
 
-    #[builder(setters(vis = ""), default)]
-    system_modal: bool,
+    #[builder(setters(vis = "", name = "internal_block_other_windows"), default)]
+    block_other_windows: bool,
 
     default_button: Option<DefaultButton>,
 
@@ -190,7 +190,7 @@ pub struct Message<'a> {
 impl<'a> Message<'a> {
     pub fn display<T: MessageOptions>(self) -> Result<T> {
         let modal = match self.hwnd.is_some() {
-            true if self.system_modal => MB_SYSTEMMODAL,
+            true if self.block_other_windows => MB_SYSTEMMODAL,
             true => MB_APPLMODAL,
             false => MB_TASKMODAL,
         };
@@ -238,11 +238,11 @@ mod message_builder_ext {
             self.hwnd(crate::hwnd(window))
         }
 
-        pub fn block_other_windows(self) -> MessageBuilder<'a, SetSystemModal<S>>
+        pub fn block_other_windows(self, value: bool) -> MessageBuilder<'a, SetBlockOtherWindows<S>>
         where
-            S::SystemModal: IsUnset,
+            S::BlockOtherWindows: IsUnset,
         {
-            self.system_modal(true)
+            self.internal_block_other_windows(value)
         }
 
         pub fn display<T: MessageOptions>(self) -> Result<T>
