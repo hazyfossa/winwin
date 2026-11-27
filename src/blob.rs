@@ -1,8 +1,8 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, path::Path};
 
 use windows::{
     Win32::{
-        Foundation::{E_POINTER, HANDLE, HMODULE, HRSRC, MEM_E_INVALID_SIZE},
+        Foundation::{E_FAIL, E_POINTER, HANDLE, HMODULE, MEM_E_INVALID_SIZE},
         System::LibraryLoader::{
             BeginUpdateResourceW, EndUpdateResourceW, FindResourceW, LOAD_LIBRARY_AS_DATAFILE,
             LOAD_LIBRARY_AS_IMAGE_RESOURCE, LoadLibraryExW, LoadResource, LockResource,
@@ -36,19 +36,6 @@ impl Into<ResourceId> for u16 {
     fn into(self) -> ResourceId {
         ResourceId {
             lpname: int_resource(self),
-        }
-    }
-}
-
-pub enum ResourceKind {
-    Data,
-}
-
-impl ResourceKind {
-    // ref: https://learn.microsoft.com/en-us/windows/win32/menurc/resource-types
-    fn into_id(self) -> u16 {
-        match self {
-            Self::Data => 10,
         }
     }
 }
@@ -94,6 +81,33 @@ pub struct Resources<'a> {
     _p: PhantomData<&'a ()>,
 }
 
+pub mod resource_kind {
+    // TODO: Seal
+    pub trait T {
+        const ID: u16;
+        type Repr<'a>;
+
+        // TODO: propagate parse errors
+        fn parse(bytes: &[u8]) -> Option<Self::Repr<'_>>;
+
+        fn to_bytes<'a>(repr: Self::Repr<'a>) -> &'a [u8];
+    }
+
+    pub struct Data;
+    impl T for Data {
+        const ID: u16 = 10;
+        type Repr<'a> = &'a [u8];
+
+        fn parse(bytes: &[u8]) -> Option<Self::Repr<'_>> {
+            Some(bytes)
+        }
+
+        fn to_bytes<'a>(repr: Self::Repr<'a>) -> &'a [u8] {
+            repr
+        }
+    }
+}
+
 impl<'a> Resources<'a> {
     // Safety: this is equivalent to an unsafe (raw pointer -> reference) cast
     // caller needs to ensure `module` is alive for `'a`
@@ -104,52 +118,38 @@ impl<'a> Resources<'a> {
         }
     }
 
-    pub fn open(&self, kind: ResourceKind, id: impl Into<ResourceId>) -> Option<Resource<'a>> {
+    pub fn open<Kind: resource_kind::T>(
+        &self,
+        id: impl Into<ResourceId>,
+    ) -> Result<Option<Kind::Repr<'a>>> {
         let lpname = id.into().lpname;
-        let lptype = int_resource(kind.into_id());
+        let lptype = int_resource(Kind::ID);
         let hres = unsafe { FindResourceW(self.module_ref, lpname, lptype) };
 
         if hres.is_invalid() {
-            return None;
+            return Ok(None);
         }
 
-        Some(Resource {
-            parent: *self,
-            hres,
-        })
-    }
-}
-
-// TODO: reorganize: merge load_bytes with Resources::open,
-// make this a ptr-lock guard instead
-pub struct Resource<'a> {
-    parent: Resources<'a>,
-    hres: HRSRC,
-}
-
-impl<'a> Resource<'a> {
-    pub fn len(&self) -> usize {
-        let hmodule = self.parent.module_ref;
-        unsafe { SizeofResource(hmodule, self.hres) as usize }
-    }
-
-    pub fn load_bytes(&self) -> Result<&'a [u8]> {
-        let hmodule = self.parent.module_ref;
-        let hmem = unsafe { LoadResource(hmodule, self.hres)? };
-        let ptr = unsafe { LockResource(hmem) }; // TODO: unlock guard
+        let len = unsafe { SizeofResource(self.module_ref, hres) };
+        let hmem = unsafe { LoadResource(self.module_ref, hres)? };
+        let ptr = unsafe { LockResource(hmem) };
 
         if ptr.is_null() {
             return Err(Error::from_hresult(E_POINTER));
         }
 
-        let len = self.len();
-        if len == 0 {
-            return Ok(&[]);
-        }
+        let bytes = if len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr.cast(), len as usize) }
+        };
 
-        let bytes = unsafe { std::slice::from_raw_parts(ptr.cast(), len) };
-
-        Ok(bytes)
+        Kind::parse(bytes)
+            .ok_or(Error::new(
+                E_FAIL,
+                "Parsing failure: Resource data is invalid",
+            ))
+            .map(Some)
     }
 }
 
@@ -161,18 +161,24 @@ pub struct ResourceUpdateTx {
 }
 
 impl ResourceUpdateTx {
-    pub fn open(path: &str, allow_overwrite: bool) -> Result<Self> {
+    pub fn open(path: &Path, allow_overwrite: bool) -> Result<Self> {
+        let path = path
+            .to_str()
+            .ok_or(Error::new(E_FAIL, "Only utf-8 paths are supported"))?;
+
         let handle = unsafe { BeginUpdateResourceW(pass_text(path), allow_overwrite.into()) }?;
+
         Ok(Self { handle })
     }
 
-    pub fn write(
+    pub fn write<Kind: resource_kind::T>(
         &mut self,
-        kind: ResourceKind,
         id: impl Into<ResourceId>,
-        bytes: &[u8],
+        data: Kind::Repr<'_>,
     ) -> Result<()> {
-        let lptype = int_resource(kind.into_id());
+        let bytes = Kind::to_bytes(data);
+
+        let lptype = int_resource(Kind::ID);
         let lpname = id.into().lpname;
         let lpdata = Some(bytes.as_ptr() as _);
         let wlanguage = LANG;
