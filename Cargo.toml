@@ -15,6 +15,6 @@ windows = { version = "0.62.2", features = ["Win32_Foundation"] }
 [features]
 messagebox = ["dep:pastey", "dep:bon", "windows/Win32_UI_WindowsAndMessaging"]
 lock-aspect-ratio = ["windows/Win32_UI_Shell"]
-blob = ["windows/Win32_System_LibraryLoader"]
+resources = ["windows/Win32_System_LibraryLoader"]
 serde = ["dep:serde"]
 tracing-layer = ["dep:tracing-core", "dep:tracing-subscriber", "windows/Win32_System_Diagnostics_Debug"]

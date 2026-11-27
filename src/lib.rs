@@ -1,9 +1,9 @@
 #[cfg(feature = "lock-aspect-ratio")]
 pub mod aspect_ratio;
-#[cfg(feature = "blob")]
-pub mod blob;
 #[cfg(feature = "messagebox")]
 pub mod messagebox;
+#[cfg(feature = "resources")]
+pub mod resources;
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::{
