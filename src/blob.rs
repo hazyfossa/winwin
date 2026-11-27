@@ -2,10 +2,11 @@ use std::marker::PhantomData;
 
 use windows::{
     Win32::{
-        Foundation::{E_POINTER, HMODULE, HRSRC},
+        Foundation::{E_POINTER, HANDLE, HMODULE, HRSRC, MEM_E_INVALID_SIZE},
         System::LibraryLoader::{
-            FindResourceW, LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE,
-            LoadLibraryExW, LoadResource, LockResource, SizeofResource,
+            BeginUpdateResourceW, EndUpdateResourceW, FindResourceW, LOAD_LIBRARY_AS_DATAFILE,
+            LOAD_LIBRARY_AS_IMAGE_RESOURCE, LoadLibraryExW, LoadResource, LockResource,
+            SizeofResource, UpdateResourceW,
         },
     },
     core::{Error, Free, PCWSTR, Result},
@@ -13,11 +14,13 @@ use windows::{
 
 use crate::pass_text;
 
+// TODO: common resource-ref type: kind; id; lang
+
 pub const fn int_resource(id: u16) -> PCWSTR {
     PCWSTR::from_raw(id as usize as *const u16)
 }
 
-struct ResourceId {
+pub struct ResourceId {
     lpname: PCWSTR,
 }
 
@@ -79,18 +82,10 @@ impl Drop for RemoteExe {
     }
 }
 
-pub struct CurrentExe(());
-
-impl CurrentExe {
-    pub fn open() -> Self {
-        Self(())
-    }
-
-    pub fn resources(&self) -> Resources<'static> {
-        // Safety: windows won't clean up resources while
-        // the current app is alive
-        unsafe { Resources::bind_lifetime(None) }
-    }
+pub fn current_resources() -> Resources<'static> {
+    // Safety: windows won't clean up resources while
+    // the current app is alive
+    unsafe { Resources::bind_lifetime(None) }
 }
 
 #[derive(Clone, Copy)]
@@ -109,7 +104,6 @@ impl<'a> Resources<'a> {
         }
     }
 
-    #[allow(private_bounds)]
     pub fn open(&self, kind: ResourceKind, id: impl Into<ResourceId>) -> Option<Resource<'a>> {
         let lpname = id.into().lpname;
         let lptype = int_resource(kind.into_id());
@@ -126,6 +120,8 @@ impl<'a> Resources<'a> {
     }
 }
 
+// TODO: reorganize: merge load_bytes with Resources::open,
+// make this a ptr-lock guard instead
 pub struct Resource<'a> {
     parent: Resources<'a>,
     hres: HRSRC,
@@ -154,5 +150,50 @@ impl<'a> Resource<'a> {
         let bytes = unsafe { std::slice::from_raw_parts(ptr.cast(), len) };
 
         Ok(bytes)
+    }
+}
+
+// MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT)
+const LANG: u16 = 0x0000_0400;
+
+pub struct ResourceUpdateTx {
+    handle: HANDLE,
+}
+
+impl ResourceUpdateTx {
+    pub fn open(path: &str, allow_overwrite: bool) -> Result<Self> {
+        let handle = unsafe { BeginUpdateResourceW(pass_text(path), allow_overwrite.into()) }?;
+        Ok(Self { handle })
+    }
+
+    pub fn write(
+        &mut self,
+        kind: ResourceKind,
+        id: impl Into<ResourceId>,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let lptype = int_resource(kind.into_id());
+        let lpname = id.into().lpname;
+        let lpdata = Some(bytes.as_ptr() as _);
+        let wlanguage = LANG;
+        let cb = bytes.len().try_into().map_err(|_| {
+            Error::new(
+                MEM_E_INVALID_SIZE,
+                "Buffer size too big for a resource update",
+            )
+        })?;
+
+        unsafe { UpdateResourceW(self.handle, lptype, lpname, wlanguage, lpdata, cb) }
+    }
+
+    pub fn commit(self) -> Result<()> {
+        let this = std::mem::ManuallyDrop::new(self);
+        unsafe { EndUpdateResourceW(this.handle, false) }
+    }
+}
+
+impl Drop for ResourceUpdateTx {
+    fn drop(&mut self) {
+        let _ = unsafe { EndUpdateResourceW(self.handle, true) };
     }
 }
